@@ -13,36 +13,32 @@ permissions:
 jobs:
   make-draft:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 25
     steps:
-      - name: Check out project
-        uses: actions/checkout@v4
-
-      - name: Install system tools
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg and eSpeak NG
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install packages
+      - name: Install Python dependencies
         run: pip install -r requirements.txt
-
-      - name: Generate video
+      - name: Generate hybrid animated Short
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CHANNEL_TOPIC: ${{ vars.CHANNEL_TOPIC }}
           VIDEO_LANGUAGE: ${{ vars.VIDEO_LANGUAGE }}
           VIDEO_DURATION: ${{ vars.VIDEO_DURATION }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          ESPEAK_VOICE: en-us
+          ESPEAK_RATE: "142"
         run: python main.py
-
-      - name: Save video draft
+      - name: Upload review package
         uses: actions/upload-artifact@v4
         with:
           name: daily-short-review
           path: output/
           retention-days: 3
+
