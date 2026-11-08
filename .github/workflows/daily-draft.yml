@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
       - name: Install Python dependencies
         run: pip install -r requirements.txt
-      - name: Generate hybrid animated Short with neural narration
+      - name: Generate hybrid animated Short with Azure neural narration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CHANNEL_TOPIC: ${{ vars.CHANNEL_TOPIC }}
@@ -32,6 +32,8 @@ jobs:
           VIDEO_DURATION: ${{ vars.VIDEO_DURATION }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           TTS_VOICE: en-US-GuyNeural
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ vars.AZURE_SPEECH_REGION }}
         run: python main.py
       - name: Upload review package
         uses: actions/upload-artifact@v4
