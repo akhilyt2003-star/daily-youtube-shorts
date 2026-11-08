@@ -370,47 +370,63 @@ IMAGE_CACHE = Path("output/visual_assets")
 IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
 
 def fetch_scene_image(scene, index):
-    """Find a freely licensed Wikimedia Commons image; cache it for this run."""
+    """Find a Wikimedia Commons image and log every retrieval decision."""
     target = IMAGE_CACHE / f"scene_{index:02d}.jpg"
     if target.exists() and target.stat().st_size > 15000:
+        print(f"[IMAGE] Scene {index+1}: CACHE HIT {target} ({target.stat().st_size} bytes)", flush=True)
         return target
+
     raw = " ".join(str(scene.get(k, "")) for k in ("visual_note", "screen_text", "narration"))
-    # Search using the visual direction first; avoid long full-sentence queries.
     terms = re.findall(r"[A-Za-z]{4,}", raw)
     stop = {"with", "from", "that", "this", "when", "where", "your", "into", "over", "under", "their", "they", "them", "scene", "show", "shows", "visual", "image", "close", "camera", "dramatic"}
-    query = " ".join([w for w in terms if w.lower() not in stop][:7]) or "science" 
+    query = " ".join([w for w in terms if w.lower() not in stop][:7]) or "science"
+    print(f"[IMAGE] Scene {index+1}: searching Wikimedia Commons; query={query!r}", flush=True)
+
     try:
         api = "https://commons.wikimedia.org/w/api.php"
         params = {"action":"query", "generator":"search", "gsrsearch":f'filetype:bitmap {query}',
                   "gsrnamespace":6, "gsrlimit":8, "prop":"imageinfo", "iiprop":"url|extmetadata",
                   "iiurlwidth":1400, "format":"json"}
-        response = requests.get(api, params=params, headers={"User-Agent":"DailyShortsDraftBot/1.0 (educational video project)"}, timeout=25)
+        response = requests.get(api, params=params,
+            headers={"User-Agent":"DailyShortsDraftBot/1.1 (educational video project)"}, timeout=25)
+        print(f"[IMAGE] Scene {index+1}: Wikimedia HTTP {response.status_code}", flush=True)
         response.raise_for_status()
-        pages = response.json().get("query", {}).get("pages", {})
-        candidates=[]
+        payload = response.json()
+        pages = payload.get("query", {}).get("pages", {})
+        candidates = []
         for page in pages.values():
-            info=(page.get("imageinfo") or [{}])[0]
-            meta=info.get("extmetadata", {})
-            mime=info.get("mime", "")
-            url=info.get("thumburl") or info.get("url")
+            info = (page.get("imageinfo") or [{}])[0]
+            meta = info.get("extmetadata", {})
+            mime = info.get("mime", "")
+            url = info.get("thumburl") or info.get("url")
             if url and mime.startswith("image/"):
-                # Commons files carry their own license metadata; save attribution for review.
-                candidates.append((url, page.get("title", ""), meta.get("LicenseShortName", {}).get("value", "Unknown"), meta.get("Artist", {}).get("value", "Unknown"), meta.get("Credit", {}).get("value", "")))
-        for url, title, license_name, artist, credit in candidates:
+                candidates.append((url, page.get("title", "Untitled"),
+                    meta.get("LicenseShortName", {}).get("value", "Unknown"),
+                    meta.get("Artist", {}).get("value", "Unknown"),
+                    meta.get("Credit", {}).get("value", "")))
+        print(f"[IMAGE] Scene {index+1}: {len(candidates)} usable image candidate(s) returned", flush=True)
+
+        for candidate_no, (url, title, license_name, artist, credit) in enumerate(candidates, 1):
             try:
-                img=requests.get(url, headers={"User-Agent":"DailyShortsDraftBot/1.0"}, timeout=30)
+                print(f"[IMAGE] Scene {index+1}: downloading candidate {candidate_no}: {title}", flush=True)
+                img = requests.get(url, headers={"User-Agent":"DailyShortsDraftBot/1.1"}, timeout=30)
                 img.raise_for_status()
                 from io import BytesIO
-                im=Image.open(BytesIO(img.content)).convert("RGB")
+                im = Image.open(BytesIO(img.content)).convert("RGB")
+                print(f"[IMAGE] Scene {index+1}: candidate dimensions {im.width}x{im.height}", flush=True)
                 if im.width >= 500 and im.height >= 500:
                     im.save(target, "JPEG", quality=92)
                     with (IMAGE_CACHE / "ATTRIBUTION.txt").open("a", encoding="utf-8") as f:
                         f.write(f"Scene {index+1}: {title}\nLicense: {license_name}\nCreator: {artist}\nCredit: {re.sub('<[^>]+>', '', str(credit))}\nSource: {url}\n\n")
+                    print(f"[IMAGE] Scene {index+1}: SUCCESS saved {target} ({im.width}x{im.height}, {target.stat().st_size} bytes); license={license_name}; creator={artist}", flush=True)
                     return target
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"Wikimedia image search failed for scene {index+1}: {e}")
+                print(f"[IMAGE] Scene {index+1}: REJECTED candidate; minimum is 500x500", flush=True)
+            except Exception as download_error:
+                print(f"[IMAGE] Scene {index+1}: candidate {candidate_no} FAILED: {type(download_error).__name__}: {download_error}", flush=True)
+    except Exception as search_error:
+        print(f"[IMAGE] Scene {index+1}: SEARCH FAILED: {type(search_error).__name__}: {search_error}", flush=True)
+
+    print(f"[IMAGE] Scene {index+1}: FALLBACK selected; no usable Wikimedia image was downloaded", flush=True)
     return None
 
 def cinematic_scene(scene, index, phase=0.0):
@@ -568,6 +584,12 @@ def main():
     make_karaoke_ass(scene_words,durations,ass)
     final=OUT/"SHORT_REVIEW_ME.mp4"
     run(["ffmpeg","-y","-i",str(silent),"-i",str(voice),"-vf",f"ass={ass},scale=1080:1920:flags=lanczos","-r","30","-c:v","libx264","-preset","veryfast","-crf","22","-c:a","aac","-b:a","160k","-shortest","-movflags","+faststart",str(final)])
+    downloaded = sorted(IMAGE_CACHE.glob("scene_*.jpg"))
+    print(f"[IMAGE SUMMARY] Cached/downloaded scene images: {len(downloaded)} of 6")
+    for image_path in downloaded:
+        print(f"[IMAGE SUMMARY] {image_path.name}: {image_path.stat().st_size} bytes")
+    if len(downloaded) < 6:
+        print("[IMAGE SUMMARY] WARNING: one or more scenes used gradient fallback; inspect [IMAGE] log lines above.")
     print(f"Created cinematic science draft: {final} ({total:.1f}s)")
 
 if __name__=="__main__":
