@@ -368,83 +368,111 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 # --- Cinematic photo-based scene renderer (free Wikimedia Commons assets) ---
 IMAGE_CACHE = Path("output/visual_assets")
 IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
+IMAGE_PATHS = {}
+COMMONS_HEADERS = {"User-Agent": "DailyShortsDraftBot/1.0 (educational video project; contact: project maintainer)"}
 
 def fetch_scene_image(scene, index):
-    """Find a Wikimedia Commons image and log every retrieval decision."""
+    """Retrieve and cache one Commons image per scene; log every decision."""
     target = IMAGE_CACHE / f"scene_{index:02d}.jpg"
     if target.exists() and target.stat().st_size > 15000:
-        print(f"[IMAGE] Scene {index+1}: CACHE HIT {target} ({target.stat().st_size} bytes)", flush=True)
-        return target
+        try:
+            with Image.open(target) as cached:
+                cached.verify()
+            print(f"[IMAGE] Scene {index+1}: CACHE HIT {target} ({target.stat().st_size} bytes)")
+            return target
+        except Exception as exc:
+            print(f"[IMAGE] Scene {index+1}: cached image invalid; deleting: {exc}")
+            target.unlink(missing_ok=True)
 
     raw = " ".join(str(scene.get(k, "")) for k in ("visual_note", "screen_text", "narration"))
     terms = re.findall(r"[A-Za-z]{4,}", raw)
-    stop = {"with", "from", "that", "this", "when", "where", "your", "into", "over", "under", "their", "they", "them", "scene", "show", "shows", "visual", "image", "close", "camera", "dramatic"}
-    query = " ".join([w for w in terms if w.lower() not in stop][:7]) or "science"
-    print(f"[IMAGE] Scene {index+1}: searching Wikimedia Commons; query={query!r}", flush=True)
-
+    stop = {"with", "from", "that", "this", "when", "where", "your", "into", "over", "under", "their", "they", "them", "scene", "show", "shows", "visual", "image", "close", "camera", "dramatic", "using", "about", "which", "through", "while"}
+    selected=[]
+    for word in terms:
+        if word.lower() not in stop and word.lower() not in [x.lower() for x in selected]:
+            selected.append(word)
+        if len(selected) == 5:
+            break
+    query = " ".join(selected) or "science"
+    api = "https://commons.wikimedia.org/w/api.php"
+    print(f"[IMAGE] Scene {index+1}: SEARCH query={query!r}")
     try:
-        api = "https://commons.wikimedia.org/w/api.php"
-        params = {"action":"query", "generator":"search", "gsrsearch":f'filetype:bitmap {query}',
-                  "gsrnamespace":6, "gsrlimit":8, "prop":"imageinfo", "iiprop":"url|extmetadata",
-                  "iiurlwidth":1400, "format":"json"}
-        response = requests.get(api, params=params,
-            headers={"User-Agent":"DailyShortsDraftBot/1.1 (educational video project)"}, timeout=25)
-        print(f"[IMAGE] Scene {index+1}: Wikimedia HTTP {response.status_code}", flush=True)
+        # Use the documented list=search endpoint rather than generator=search.
+        params = {"action":"query", "list":"search", "srsearch":query,
+                  "srnamespace":6, "srlimit":10, "format":"json"}
+        response = requests.get(api, params=params, headers=COMMONS_HEADERS, timeout=30)
+        print(f"[IMAGE] Scene {index+1}: search HTTP {response.status_code}; URL={response.url}")
         response.raise_for_status()
-        payload = response.json()
-        pages = payload.get("query", {}).get("pages", {})
-        candidates = []
+        results = response.json().get("query", {}).get("search", [])
+        print(f"[IMAGE] Scene {index+1}: {len(results)} file search result(s)")
+        if not results:
+            # Broader fallback query, but still restricted to Commons file namespace.
+            broad = " ".join(selected[:2]) or "science"
+            params["srsearch"] = broad
+            print(f"[IMAGE] Scene {index+1}: retrying broader query={broad!r}")
+            response = requests.get(api, params=params, headers=COMMONS_HEADERS, timeout=30)
+            print(f"[IMAGE] Scene {index+1}: broad search HTTP {response.status_code}")
+            response.raise_for_status()
+            results = response.json().get("query", {}).get("search", [])
+            print(f"[IMAGE] Scene {index+1}: broad search returned {len(results)} result(s)")
+
+        titles = [item.get("title", "") for item in results if item.get("title", "")]
+        if not titles:
+            print(f"[IMAGE] Scene {index+1}: NO RESULTS; gradient fallback will be used")
+            return None
+        info_params = {"action":"query", "titles":"|".join(titles), "prop":"imageinfo",
+                       "iiprop":"url|extmetadata", "iiurlwidth":1600, "format":"json"}
+        info_response = requests.get(api, params=info_params, headers=COMMONS_HEADERS, timeout=30)
+        print(f"[IMAGE] Scene {index+1}: imageinfo HTTP {info_response.status_code}")
+        info_response.raise_for_status()
+        pages = info_response.json().get("query", {}).get("pages", {})
+        candidates=[]
         for page in pages.values():
-            info = (page.get("imageinfo") or [{}])[0]
-            meta = info.get("extmetadata", {})
-            mime = info.get("mime", "")
-            url = info.get("thumburl") or info.get("url")
-            if url and mime.startswith("image/"):
-                candidates.append((url, page.get("title", "Untitled"),
+            info=(page.get("imageinfo") or [{}])[0]
+            meta=info.get("extmetadata", {})
+            url=info.get("thumburl") or info.get("url")
+            if url:
+                candidates.append((url, page.get("title", "Unknown title"),
                     meta.get("LicenseShortName", {}).get("value", "Unknown"),
                     meta.get("Artist", {}).get("value", "Unknown"),
                     meta.get("Credit", {}).get("value", "")))
-        print(f"[IMAGE] Scene {index+1}: {len(candidates)} usable image candidate(s) returned", flush=True)
-
-        for candidate_no, (url, title, license_name, artist, credit) in enumerate(candidates, 1):
+        print(f"[IMAGE] Scene {index+1}: {len(candidates)} candidate URL(s) with imageinfo")
+        from io import BytesIO
+        for url, title, license_name, artist, credit in candidates:
             try:
-                print(f"[IMAGE] Scene {index+1}: downloading candidate {candidate_no}: {title}", flush=True)
-                img = requests.get(url, headers={"User-Agent":"DailyShortsDraftBot/1.1"}, timeout=30)
+                img=requests.get(url, headers=COMMONS_HEADERS, timeout=35)
+                print(f"[IMAGE] Scene {index+1}: download HTTP {img.status_code}; {len(img.content)} bytes; {title}")
                 img.raise_for_status()
-                from io import BytesIO
-                im = Image.open(BytesIO(img.content)).convert("RGB")
-                print(f"[IMAGE] Scene {index+1}: candidate dimensions {im.width}x{im.height}", flush=True)
-                if im.width >= 500 and im.height >= 500:
+                im=Image.open(BytesIO(img.content)).convert("RGB")
+                if im.width >= 500 and im.height >= 350:
                     im.save(target, "JPEG", quality=92)
+                    clean=lambda value: re.sub(r"<[^>]+>", "", str(value or "")).strip()
                     with (IMAGE_CACHE / "ATTRIBUTION.txt").open("a", encoding="utf-8") as f:
-                        f.write(f"Scene {index+1}: {title}\nLicense: {license_name}\nCreator: {artist}\nCredit: {re.sub('<[^>]+>', '', str(credit))}\nSource: {url}\n\n")
-                    print(f"[IMAGE] Scene {index+1}: SUCCESS saved {target} ({im.width}x{im.height}, {target.stat().st_size} bytes); license={license_name}; creator={artist}", flush=True)
+                        f.write(f"Scene {index+1}: {title}\nLicense: {clean(license_name)}\nCreator: {clean(artist)}\nCredit: {clean(credit)}\nSource: {url}\n\n")
+                    print(f"[IMAGE] Scene {index+1}: SUCCESS saved {target}; dimensions={im.width}x{im.height}; license={clean(license_name)}")
                     return target
-                print(f"[IMAGE] Scene {index+1}: REJECTED candidate; minimum is 500x500", flush=True)
-            except Exception as download_error:
-                print(f"[IMAGE] Scene {index+1}: candidate {candidate_no} FAILED: {type(download_error).__name__}: {download_error}", flush=True)
-    except Exception as search_error:
-        print(f"[IMAGE] Scene {index+1}: SEARCH FAILED: {type(search_error).__name__}: {search_error}", flush=True)
-
-    print(f"[IMAGE] Scene {index+1}: FALLBACK selected; no usable Wikimedia image was downloaded", flush=True)
+                print(f"[IMAGE] Scene {index+1}: rejected small image {im.width}x{im.height}")
+            except Exception as exc:
+                print(f"[IMAGE] Scene {index+1}: candidate download/decode failed: {type(exc).__name__}: {exc}")
+        print(f"[IMAGE] Scene {index+1}: all candidates failed; gradient fallback will be used")
+    except Exception as exc:
+        print(f"[IMAGE] Scene {index+1}: Wikimedia request failed: {type(exc).__name__}: {exc}")
     return None
 
 def cinematic_scene(scene, index, phase=0.0):
     """Full-bleed photo, cinematic grade, restrained editorial typography."""
-    path=fetch_scene_image(scene,index)
-    if path:
+    path=IMAGE_PATHS.get(index)
+    if path and Path(path).exists():
         src=Image.open(path).convert("RGB")
         sw,sh=src.size
         scale=max(W/sw,H/sh)
         src=src.resize((int(sw*scale),int(sh*scale)),Image.Resampling.LANCZOS)
-        # Gentle per-frame drift creates motion without distorting the photograph.
         maxx=max(0,src.width-W); maxy=max(0,src.height-H)
         x=int(maxx*(0.35+0.30*phase)); y=int(maxy*(0.40+0.20*math.sin(phase*math.pi)))
         im=src.crop((x,y,x+W,y+H)).convert("RGBA")
     else:
-        # Explicit fallback: atmospheric dark background, not a misleading unrelated stock image.
+        print(f"[IMAGE] Scene {index+1}: using gradient fallback (no cached photograph)")
         im=vertical_gradient(index).convert("RGBA")
-    # Dark cinematic grade + top/bottom gradients for legible text.
     shade=Image.new("RGBA",(W,H),(3,8,18,72))
     im=Image.alpha_composite(im,shade)
     grad=Image.new("RGBA",(W,H),(0,0,0,0)); gp=grad.load()
@@ -456,14 +484,12 @@ def cinematic_scene(scene, index, phase=0.0):
             for xx in range(W): gp[xx,yy]=(2,7,16,a)
     im=Image.alpha_composite(im,grad).convert("RGB")
     d=ImageDraw.Draw(im)
-    # Small documentary-style progress marker.
     d.rounded_rectangle((38,48,682,55),radius=4,fill=(255,255,255,75))
     d.rounded_rectangle((38,48,38+644*(index+1)/6,55),radius=4,fill=(255,190,75))
     d.text((42,82),f"SCIENCE / FIELD REPORT     {index+1:02d}",font=font(17,True),fill=(255,205,115))
     headline=re.sub(r"\s+"," ",str(scene.get("screen_text", ""))).strip().upper()
     f=font(43,True)
-    while d.textbbox((0,0),headline,font=f)[2] > 630 and f.size>27:
-        f=font(f.size-2,True)
+    while d.textbbox((0,0),headline,font=f)[2] > 630 and f.size>27: f=font(f.size-2,True)
     d.multiline_text((42,H-430),headline,font=f,fill=(255,255,255),spacing=8,stroke_width=1,stroke_fill=(0,0,0))
     labels=scene.get("labels",[])
     if isinstance(labels,list) and labels:
@@ -544,6 +570,21 @@ def main():
         tts.voices.close()
     except Exception:
         pass
+    # Retrieve each scene photograph once before frame rendering; reuse the cached path.
+    global IMAGE_PATHS
+    IMAGE_PATHS = {}
+    print("[IMAGE SUMMARY] Starting one-time image retrieval for all scenes")
+    for image_index, image_scene in enumerate(scenes):
+        IMAGE_PATHS[image_index] = fetch_scene_image(image_scene, image_index)
+    found = sum(1 for image_path in IMAGE_PATHS.values() if image_path)
+    print(f"[IMAGE SUMMARY] Retrieved {found}/{len(scenes)} scene photographs")
+    if found == 0:
+        print("[IMAGE SUMMARY] WARNING: no photographs retrieved; all scenes will use gradient fallback")
+    elif found < len(scenes):
+        print(f"[IMAGE SUMMARY] WARNING: {len(scenes)-found} scene(s) will use gradient fallback")
+    else:
+        print("[IMAGE SUMMARY] All scenes have photographs")
+
     # Render animated scene frames: the guide gestures/bobs, science highlights pulse,
     # particles drift, and each scene receives a gentle camera move during encoding.
     video_parts=[]
@@ -584,12 +625,6 @@ def main():
     make_karaoke_ass(scene_words,durations,ass)
     final=OUT/"SHORT_REVIEW_ME.mp4"
     run(["ffmpeg","-y","-i",str(silent),"-i",str(voice),"-vf",f"ass={ass},scale=1080:1920:flags=lanczos","-r","30","-c:v","libx264","-preset","veryfast","-crf","22","-c:a","aac","-b:a","160k","-shortest","-movflags","+faststart",str(final)])
-    downloaded = sorted(IMAGE_CACHE.glob("scene_*.jpg"))
-    print(f"[IMAGE SUMMARY] Cached/downloaded scene images: {len(downloaded)} of 6")
-    for image_path in downloaded:
-        print(f"[IMAGE SUMMARY] {image_path.name}: {image_path.stat().st_size} bytes")
-    if len(downloaded) < 6:
-        print("[IMAGE SUMMARY] WARNING: one or more scenes used gradient fallback; inspect [IMAGE] log lines above.")
     print(f"Created cinematic science draft: {final} ({total:.1f}s)")
 
 if __name__=="__main__":
