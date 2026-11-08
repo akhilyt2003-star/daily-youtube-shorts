@@ -214,6 +214,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     Path(path).write_text(head+"\n".join(lines),encoding="utf-8")
 
 def main():
+    print("HYBRID_BUILD_CHECK_20261108")
     obj=gemini_script()
     scenes=obj["scenes"]
     narrations=[s["narration"].strip() for s in scenes]
