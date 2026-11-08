@@ -46,10 +46,34 @@ medical advice, and claims that need current data. Keep labels short and factual
     if r.status_code == 404:
         raise RuntimeError(f"Gemini model '{MODEL}' returned 404. Keep the model that worked in your previous run, or set repository variable GEMINI_MODEL to a currently available generateContent model. Details: {r.text[:400]}")
     r.raise_for_status()
-    data=json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-    scenes=data.get("scenes",[])
-    if len(scenes)!=6 or any(not s.get("narration") for s in scenes):
-        raise ValueError("Gemini did not return six complete narration scenes. Run again.")
+    raw_text=r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        data=json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Gemini returned invalid JSON: {exc}. Response preview: {raw_text[:500]}") from exc
+
+    # Gemini may occasionally return the six scene objects as a top-level
+    # JSON array instead of the requested object containing a `scenes` key.
+    # Normalize both valid shapes into one consistent structure.
+    if isinstance(data, list):
+        scenes=data
+        data={"title": "Science, psychology and unusual facts", "description": "", "scenes": scenes}
+    elif isinstance(data, dict):
+        scenes=data.get("scenes", [])
+        # Some model responses wrap the object one level deeper.
+        if not scenes and isinstance(data.get("data"), dict):
+            scenes=data["data"].get("scenes", [])
+            if scenes:
+                data.update(data["data"])
+                data["scenes"]=scenes
+    else:
+        raise ValueError(f"Gemini returned {type(data).__name__}, expected a JSON object or scene array.")
+
+    if not isinstance(scenes, list) or len(scenes)!=6:
+        raise ValueError(f"Gemini must return exactly six scenes; received {len(scenes) if isinstance(scenes, list) else 'a non-list value'}.")
+    if any(not isinstance(scene, dict) or not isinstance(scene.get("narration"), str) or not scene["narration"].strip() for scene in scenes):
+        raise ValueError("Gemini returned six scenes, but at least one scene is missing valid narration text.")
+    data["scenes"]=scenes
     words=" ".join(s["narration"] for s in scenes).split()
     # Gemini may return a slightly shorter or longer script than requested.
     # Audio duration is measured and corrected later by adaptive speech-rate logic,
