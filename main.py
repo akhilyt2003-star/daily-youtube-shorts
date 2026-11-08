@@ -1,4 +1,4 @@
-import os, json, subprocess, re, math, random, time
+import os, json, subprocess, re, math, random
 from pathlib import Path
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -7,9 +7,9 @@ OUT = Path("output")
 OUT.mkdir(exist_ok=True)
 W, H = 720, 1280
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-VOICE = os.getenv("TTS_VOICE", "en-US-GuyNeural")
-AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "")
-AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "")
+TTS_VOICE = os.getenv("KOKORO_VOICE", "am_michael")
+TTS_MODEL = os.getenv("KOKORO_MODEL_PATH", "models/kokoro-v1.0.onnx")
+TTS_VOICES = os.getenv("KOKORO_VOICES_PATH", "models/voices-v1.0.bin")
 
 def run(cmd):
     subprocess.run(cmd, check=True)
@@ -52,7 +52,7 @@ medical advice, and claims that need current data. Keep labels short and factual
         raise ValueError("Gemini did not return six complete narration scenes. Run again.")
     words=" ".join(s["narration"] for s in scenes).split()
     # Gemini may return a slightly shorter or longer script than requested.
-    # Audio duration is measured and corrected later by adaptive neural speech-rate logic,
+    # Audio duration is measured and corrected later by adaptive speech-rate logic,
     # so use a broad safety range here instead of failing on minor word-count drift.
     if not 60 <= len(words) <= 130:
         raise ValueError(f"Script length was {len(words)} words, outside the 60-130 word safety range. Check the generated script.")
@@ -252,90 +252,66 @@ def main():
         "2. Check the estimated word-by-word captions against the narration.\n"
         "3. Confirm all six scenes tell one coherent story.\n"
         "4. This is hybrid 2.5D motion graphics with animated gestures, bobbing, drifting particles, pulsing science highlights and camera movement. It is not full 3D character animation.\n"
-        "5. Upload manually only after approval.\n",encoding="utf-8")
+        "5. Narration uses the local Kokoro open-weight neural TTS model (American male voice).\n"
+        "6. Upload manually only after approval.\n",encoding="utf-8")
     scene_words=[text.split() for text in narrations]
     audio_files=[OUT/f"voice_{i:02d}.wav" for i in range(len(narrations))]
-    mp3_files=[OUT/f"voice_{i:02d}.mp3" for i in range(len(narrations))]
 
-    def synthesize_all(rate_percent):
-        from xml.sax.saxutils import escape
-        if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
-            raise RuntimeError(
-                "Azure Speech credentials are missing. Add AZURE_SPEECH_KEY as a GitHub Actions secret "
-                "and AZURE_SPEECH_REGION as a repository variable."
-            )
-        endpoint = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
-        headers = {
-            "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
-            "Content-Type": "application/ssml+xml",
-            "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-            "User-Agent": "daily-youtube-shorts-generator",
-        }
-        for text, mp3, wav in zip(narrations, mp3_files, audio_files):
-            ssml = (
-                "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
-                "xml:lang='en-US'>"
-                f"<voice name='{VOICE}'><prosody rate='{rate_percent:+d}%'>{escape(text)}</prosody></voice>"
-                "</speak>"
-            )
-            last_error = None
-            for attempt in range(3):
-                try:
-                    response = requests.post(
-                        endpoint, headers=headers, data=ssml.encode("utf-8"), timeout=60
-                    )
-                    if response.status_code != 200:
-                        raise RuntimeError(
-                            f"Azure Speech returned HTTP {response.status_code}: {response.text[:500]}"
-                        )
-                    if len(response.content) < 1000:
-                        raise RuntimeError("Azure Speech returned an empty or unusually small audio response")
-                    mp3.write_bytes(response.content)
-                    subprocess.run([
-                        "ffmpeg", "-y", "-i", str(mp3), "-ar", "48000",
-                        "-ac", "1", "-c:a", "pcm_s16le", str(wav)
-                    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    last_error = None
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    if attempt < 2:
-                        time.sleep((attempt + 1) * 5)
-            if last_error is not None:
-                raise RuntimeError(
-                    f"Azure neural TTS failed for scene audio {mp3.name} after 3 attempts: {last_error}"
-                ) from last_error
+    # Kokoro is an open-weight neural TTS model running locally on the GitHub runner.
+    # No external TTS account, API key, card, or per-character fee is required.
+    import soundfile as sf
+    from kokoro_onnx import Kokoro
 
-    def render_voice(rate_percent):
-        synthesize_all(rate_percent)
+    model_path=Path(TTS_MODEL)
+    voices_path=Path(TTS_VOICES)
+    if not model_path.exists() or not voices_path.exists():
+        raise FileNotFoundError(
+            f"Kokoro model files are missing. Expected {model_path} and {voices_path}. "
+            "Check the workflow model-download step."
+        )
+    tts=Kokoro(str(model_path), str(voices_path))
+
+    def render_voice(speed):
         rendered_durations=[]
-        for wav in audio_files:
-            dur=float(subprocess.check_output(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", str(wav)], text=True
-            ).strip())
-            rendered_durations.append(dur)
-        return rendered_durations, sum(rendered_durations)
+        try:
+            for text,wav in zip(narrations,audio_files):
+                audio,sample_rate=tts.create(
+                    text, voice=TTS_VOICE, speed=float(speed), lang="en-us"
+                )
+                if audio is None or len(audio)==0:
+                    raise RuntimeError(f"Kokoro returned empty audio for {wav.name}")
+                sf.write(str(wav),audio,sample_rate,subtype="PCM_16")
+                dur=float(subprocess.check_output(
+                    ["ffprobe","-v","error","-show_entries","format=duration",
+                     "-of","default=noprint_wrappers=1:nokey=1",str(wav)],text=True
+                ).strip())
+                rendered_durations.append(dur)
+            return rendered_durations,sum(rendered_durations)
+        finally:
+            # Keep the model loaded while measuring/re-rendering; it is released at exit.
+            pass
 
-    # Use Azure Neural US male voice and modest rate adjustments to preserve
-    # natural delivery while keeping the requested 35-45 second output.
-    active_rate=0
-    durations,total=render_voice(active_rate)
+    active_speed=1.0
+    durations,total=render_voice(active_speed)
     for attempt in range(2):
         if 35.0 <= total <= 45.0:
             break
-        adjustment=int(round((total / 40.0 - 1.0) * 100.0))
-        active_rate=max(-12, min(12, adjustment))
-        if (total > 45.0 and active_rate == 12) or (total < 35.0 and active_rate == -12):
-            break
-        durations,total=render_voice(active_rate)
+        # Kokoro speed > 1 speaks faster; keep adjustments modest for natural delivery.
+        proposed=active_speed*(total/40.0)
+        active_speed=max(0.88,min(1.15,proposed))
+        durations,total=render_voice(active_speed)
 
     if not 35.0 <= total <= 45.0:
         raise RuntimeError(
-            f"Neural narration duration is {total:.1f}s, outside the 35-45s target, "
-            f"after modest rate adjustment ({active_rate:+d}%). Shorten or expand the generated script and rerun."
+            f"Kokoro narration duration is {total:.1f}s, outside the 35-45s target "
+            f"after modest speed adjustment ({active_speed:.2f}x). "
+            "Shorten or expand the generated script and rerun."
         )
-    print(f"Azure Neural narration duration: {total:.1f}s; voice: {VOICE}; rate: {active_rate:+d}%")
+    print(f"Kokoro neural narration duration: {total:.1f}s; voice: {TTS_VOICE}; speed: {active_speed:.2f}x")
+    try:
+        tts.voices.close()
+    except Exception:
+        pass
     # Render animated scene frames: the guide gestures/bobs, science highlights pulse,
     # particles drift, and each scene receives a gentle camera move during encoding.
     video_parts=[]
@@ -371,7 +347,7 @@ def main():
     audio_list=OUT/"audio.txt"
     audio_list.write_text("".join(f"file '{p.resolve()}'\n" for p in audio_files),encoding="utf-8")
     voice=OUT/"voice.wav"
-    run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(audio_list),"-c:a","pcm_s16le","-ar","48000","-ac","1",str(voice)])
+    run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(audio_list),"-c","copy",str(voice)])
     ass=OUT/"captions.ass"
     make_karaoke_ass(scene_words,durations,ass)
     final=OUT/"SHORT_REVIEW_ME.mp4"
