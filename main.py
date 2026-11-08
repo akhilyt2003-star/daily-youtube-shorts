@@ -174,60 +174,160 @@ def draw_environment(d,cx,cy):
     for x,y in [(cx-230,cy-200),(cx+235,cy+130),(cx-260,cy+100)]:
         d.ellipse((x-5,y-5,x+5,y+5),fill="white")
 
+
+def draw_heart(d,cx,cy,scale=1.0):
+    # Stylised anatomical heart built from layered vector forms.
+    r=int(95*scale)
+    d.line((cx-28*scale,cy-75*scale,cx-42*scale,cy-150*scale),fill=(225,90,110),width=max(8,int(24*scale)))
+    d.line((cx+30*scale,cy-70*scale,cx+75*scale,cy-145*scale),fill=(245,125,115),width=max(8,int(22*scale)))
+    d.ellipse((cx-r,cy-r//2,cx+8*scale,cy+r),fill=(180,48,85),outline=(255,185,190),width=4)
+    d.ellipse((cx-8*scale,cy-r//2,cx+r,cy+r),fill=(215,65,95),outline=(255,185,190),width=4)
+    d.polygon([(cx-r,cy),(cx+r,cy),(cx,cy+int(1.45*r))],fill=(195,48,83))
+    d.arc((cx-r//2,cy-r//3,cx+r//2,cy+r//2),190,300,fill=(255,190,195),width=5)
+
+def draw_eye(d,cx,cy,scale=1.0):
+    w=int(210*scale); h=int(115*scale)
+    d.ellipse((cx-w,cy-h,cx+w,cy+h),fill=(225,238,245),outline=(105,210,230),width=8)
+    d.ellipse((cx-int(78*scale),cy-int(78*scale),cx+int(78*scale),cy+int(78*scale)),fill=(55,150,180))
+    d.ellipse((cx-int(34*scale),cy-int(34*scale),cx+int(34*scale),cy+int(34*scale)),fill=(8,22,42))
+    d.ellipse((cx-int(20*scale),cy-int(48*scale),cx+int(2*scale),cy-int(26*scale)),fill="white")
+    d.arc((cx-w,cy-h,cx+w,cy+h),190,350,fill=(255,255,255),width=5)
+
+def draw_clock(d,cx,cy,scale=1.0):
+    r=int(155*scale)
+    d.ellipse((cx-r,cy-r,cx+r,cy+r),fill=(19,43,75),outline=(120,210,235),width=9)
+    for a in range(0,360,30):
+        x1=cx+int((r-18)*math.cos(math.radians(a))); y1=cy+int((r-18)*math.sin(math.radians(a)))
+        x2=cx+int((r-35)*math.cos(math.radians(a))); y2=cy+int((r-35)*math.sin(math.radians(a)))
+        d.line((x1,y1,x2,y2),fill=(225,240,250),width=5)
+    d.line((cx,cy,cx-int(45*scale),cy-int(90*scale)),fill=(255,210,105),width=10)
+    d.line((cx,cy,cx+int(90*scale),cy+int(35*scale)),fill=(255,210,105),width=8)
+    d.ellipse((cx-12,cy-12,cx+12,cy+12),fill="white")
+
+def draw_dna(d,cx,cy,scale=1.0):
+    pts1=[]; pts2=[]
+    for i in range(13):
+        y=cy-int(230*scale)+int(i*38*scale)
+        x=cx+int(95*scale*math.sin(i*math.pi/3))
+        x2=cx-int(95*scale*math.sin(i*math.pi/3))
+        pts1.append((x,y)); pts2.append((x2,y))
+        d.line((x,y,x2,y),fill=(245,190,105),width=5)
+        d.ellipse((x-10,y-10,x+10,y+10),fill=(95,210,230))
+        d.ellipse((x2-10,y-10,x2+10,y+10),fill=(190,140,235))
+    d.line(pts1,fill=(100,215,235),width=12)
+    d.line(pts2,fill=(205,150,235),width=12)
+
+def draw_atom(d,cx,cy,scale=1.0):
+    for angle in (0,60,120):
+        box=(cx-int(210*scale),cy-int(85*scale),cx+int(210*scale),cy+int(85*scale))
+        layer=Image.new("RGBA",(W,H),(0,0,0,0)); ld=ImageDraw.Draw(layer)
+        ld.ellipse(box,outline=(95,215,240,230),width=7)
+        layer=layer.rotate(angle,resample=Image.Resampling.BICUBIC,center=(cx,cy))
+        # Composite onto the RGB canvas without changing its mode.
+        d._image.paste(layer,(0,0),layer)
+    d.ellipse((cx-34,cy-34,cx+34,cy+34),fill=(255,205,100),outline="white",width=4)
+
+def scene_motif(d,scene,index,cx,cy,phase):
+    words=(" ".join(str(scene.get(k,"")) for k in ("screen_text","visual_note","narration"))).lower()
+    kind=scene.get("visual_type","science_diagram")
+    # Semantic cues select a concrete visual; index fallback guarantees variety.
+    if any(k in words for k in ("brain","memory","thought","mind","psych","neuron","decision","emotion","fear","attention")):
+        draw_brain(d,cx,cy)
+        motif="BRAIN / NEURAL ACTIVITY"
+    elif any(k in words for k in ("heart","blood","pulse","cardiac")):
+        draw_heart(d,cx,cy,1.0); motif="CARDIOVASCULAR SYSTEM"
+    elif any(k in words for k in ("eye","vision","visual","see","light","blind")):
+        draw_eye(d,cx,cy,0.9); motif="VISION / PERCEPTION"
+    elif any(k in words for k in ("time","clock","sleep","circadian","rhythm")):
+        draw_clock(d,cx,cy,0.9); motif="BIOLOGICAL RHYTHM"
+    elif any(k in words for k in ("dna","gene","genetic","cell","evolution")):
+        draw_dna(d,cx,cy,0.9); motif="GENETIC INFORMATION"
+    elif any(k in words for k in ("atom","quantum","particle","molecule","physics","energy")):
+        draw_atom(d,cx,cy,0.8); motif="PHYSICAL SYSTEM"
+    elif kind=="anatomy":
+        draw_brain(d,cx,cy); motif="ANATOMICAL DETAIL"
+    elif kind=="data_visual":
+        draw_diagram(d,cx,cy,"data_visual"); motif="PATTERN / DATA"
+    elif kind=="environment":
+        draw_environment(d,cx,cy); motif="NATURAL SYSTEM"
+    elif kind=="object":
+        draw_object(d,cx,cy); motif="OBJECT / EVIDENCE"
+    else:
+        choices=[draw_neuron,draw_diagram,draw_environment,draw_object]
+        if index % 4 == 0:
+            draw_neuron(d,cx,cy); motif="CONNECTED NETWORK"
+        elif index % 4 == 1:
+            draw_diagram(d,cx,cy,"science_diagram"); motif="SYSTEM MAP"
+        elif index % 4 == 2:
+            draw_environment(d,cx,cy); motif="ENVIRONMENT"
+        else:
+            draw_object(d,cx,cy); motif="OBSERVATION"
+    # Small moving highlight to make the illustration feel active.
+    pulse=13+int(8*(0.5+0.5*math.sin(phase*2*math.pi)))
+    d.ellipse((cx-pulse*3,cy-pulse*3,cx+pulse*3,cy+pulse*3),outline=(255,220,130),width=3)
+    return motif
+
 def draw_scene(scene,index,phase=0.0):
     im=vertical_gradient(index)
     d=ImageDraw.Draw(im)
-    # Background depth rings, subtle grid and drifting light particles.
-    drift=int(18*math.sin(phase*2*math.pi))
-    for rad in (260,360,470):
-        d.arc((W//2-rad+drift,420-rad,W//2+rad+drift,420+rad),195,345,fill=(70,105,150),width=2)
-    for j in range(9):
-        px=int((j*91 + phase*180 + index*37) % W)
-        py=int((j*137 + phase*95 + index*61) % 900)
-        rr=3+(j%3)
-        d.ellipse((px-rr,py-rr,px+rr,py+rr),fill=(115,205,235))
-    d.rounded_rectangle((45,58,675,66),radius=5,fill=(70,90,125))
-    d.rounded_rectangle((45,58,45+630*(index+1)/6,66),radius=5,fill=(255,211,75))
-    d.text((48,92),f"FIELD NOTES  /  {index+1:02d}",font=font(22,True),fill=(255,220,125))
-    kind=scene.get("visual_type","science_diagram")
-    bob=int(9*math.sin(phase*2*math.pi))
-    gesture=int(45*math.sin(phase*2*math.pi))
-    pulse=int(12+10*(0.5+0.5*math.sin(phase*4*math.pi)))
-    if kind=="character":
-        draw_character(d,360,390+bob,gesture)
-        draw_brain(d,360,900)
-        d.ellipse((360-pulse*5,900-pulse*3,360+pulse*5,900+pulse*3),outline=(255,220,120),width=4)
-    elif kind=="anatomy":
-        draw_brain(d,360,650)
-        draw_character(d,540,960+bob,gesture)
-        d.ellipse((360-pulse*7,650-pulse*5,360+pulse*7,650+pulse*5),outline=(255,220,120),width=4)
-    elif kind=="object":
-        ox=int(18*math.sin(phase*2*math.pi))
-        draw_object(d,350+ox,650+bob)
-        draw_character(d,525,950+bob,gesture)
-    elif kind=="environment":
-        draw_environment(d,360,650+bob)
-        draw_character(d,525,950+bob,gesture)
-    elif kind=="data_visual":
-        draw_diagram(d,360,660,"data_visual")
-        # Animated sweep line across the chart to direct attention.
-        sx=190+int(330*phase)
-        d.line((sx,420,sx,825),fill=(255,230,135),width=5)
-        draw_character(d,525,950+bob,gesture)
-    else:
-        draw_diagram(d,360,650,"science_diagram")
-        # Pulsing connection nodes.
-        d.ellipse((360-pulse*4,650-pulse*4,360+pulse*4,650+pulse*4),outline=(255,220,120),width=4)
-        draw_character(d,525,950+bob,gesture)
-    # Scene heading in its own panel; subtitle-safe area remains uncluttered.
+    # Cinematic technical backdrop: subtle grid, orbital rings and moving particles.
+    drift=int(22*math.sin(phase*2*math.pi))
+    for rad in (245,345,455):
+        d.arc((W//2-rad+drift,470-rad,W//2+rad+drift,470+rad),195,345,fill=(65,105,150),width=2)
+    for x in range(28,W,58):
+        d.line((x,130,x,940),fill=(55,85,120),width=1)
+    for y in range(150,950,58):
+        d.line((25,y,695,y),fill=(55,85,120),width=1)
+    for j in range(12):
+        px=int((j*79+phase*210+index*43)%W)
+        py=int((j*113+phase*125+index*67)%940)
+        rr=2+(j%3)
+        d.ellipse((px-rr,py-rr,px+rr,py+rr),fill=(125,210,235))
+    # Progress indicator and editorial header.
+    d.rounded_rectangle((38,48,682,56),radius=5,fill=(65,85,115))
+    d.rounded_rectangle((38,48,38+644*(index+1)/6,56),radius=5,fill=(255,211,75))
+    d.text((42,76),f"FIELD NOTES  /  {index+1:02d}",font=font(20,True),fill=(255,220,125))
+
+    # Hero illustration changes position and scale across scenes.
+    layouts=[(360,425,0.92),(360,475,0.82),(360,430,0.95),
+             (360,475,0.84),(360,420,0.92),(360,430,0.90)]
+    cx,cy,scale=layouts[index%len(layouts)]
+    # Soft halo behind the subject.
+    halo=Image.new("RGBA",(W,H),(0,0,0,0)); hd=ImageDraw.Draw(halo)
+    hr=int(245*scale)
+    hd.ellipse((cx-hr,cy-hr,cx+hr,cy+hr),fill=(55,145,195,32))
+    halo=halo.filter(ImageFilter.GaussianBlur(32))
+    im=Image.alpha_composite(im.convert("RGBA"),halo).convert("RGB")
+    d=ImageDraw.Draw(im)
+    motif=scene_motif(d,scene,index,cx,cy,phase)
+
+    # Character is now a guide, not a repeated decoration in every scene.
+    if index in (0,5) or scene.get("visual_type")=="character":
+        pose=int(35*math.sin(phase*2*math.pi))
+        draw_character(d,570,790+int(8*math.sin(phase*2*math.pi)),pose)
+
+    # Distinct scene title panel and short factual labels from Gemini.
     headline=(scene.get("screen_text","") or "").upper()
-    f=font(43,True)
+    f=font(42,True)
     bb=d.textbbox((0,0),headline,font=f); tw=bb[2]-bb[0]
     if tw>620:
-        f=font(34,True); bb=d.textbbox((0,0),headline,font=f); tw=bb[2]-bb[0]
-    d.rounded_rectangle((35,1010,685,1100),radius=22,fill=(8,15,32))
-    d.text(((W-tw)//2,1027),headline,font=f,fill=(255,255,255))
-    # Removed micro-labels: they competed with the karaoke captions.
+        f=font(33,True); bb=d.textbbox((0,0),headline,font=f); tw=bb[2]-bb[0]
+    d.rounded_rectangle((30,890,690,1000),radius=24,fill=(7,15,31),outline=(75,125,160),width=2)
+    d.text(((W-tw)//2,915),headline,font=f,fill=(255,255,255))
+    d.text((42,1020),motif,font=font(17,True),fill=(115,215,230))
+
+    labels=scene.get("labels",[])
+    if isinstance(labels,list) and labels:
+        label_text="   •   ".join(str(x)[:28] for x in labels[:2])
+        d.rounded_rectangle((38,1060,682,1120),radius=16,fill=(17,32,53),outline=(70,105,140),width=1)
+        d.text((56,1078),label_text,font=font(19,True),fill=(225,235,245))
+
+    # Scene-specific visual direction is retained as a small editorial cue.
+    note=str(scene.get("visual_note","")).strip()
+    if note:
+        note=re.sub(r"\s+"," ",note)
+        if len(note)>66: note=note[:63].rstrip()+"..."
+        d.text((42,1160),note,font=font(15),fill=(165,190,210))
     return im
 
 def ass_time(t):
