@@ -1,3 +1,4 @@
+
 name: Generate daily Short draft
 
 on:
@@ -14,20 +15,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng libespeak-ng1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Cache Kokoro model files
         id: kokoro-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: models
           key: kokoro-v1.0-am-michael-2026-11
@@ -61,7 +62,7 @@ jobs:
         run: python main.py
 
       - name: Upload review package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: daily-short-review
           path: output/
