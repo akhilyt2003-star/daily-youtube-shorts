@@ -12,29 +12,54 @@ permissions:
 jobs:
   make-draft:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install FFmpeg
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg espeak-ng libespeak-ng1
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Cache Kokoro model files
+        id: kokoro-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: kokoro-v1.0-am-michael-2026-11
+
+      - name: Download Kokoro model and male US voice pack
+        if: steps.kokoro-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl --fail --location --retry 5 --retry-delay 3 \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx \
+            --output models/kokoro-v1.0.onnx
+          curl --fail --location --retry 5 --retry-delay 3 \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin \
+            --output models/voices-v1.0.bin
+          test -s models/kokoro-v1.0.onnx
+          test -s models/voices-v1.0.bin
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
-      - name: Generate hybrid animated Short with Azure neural narration
+
+      - name: Generate hybrid animated Short with local Kokoro neural narration
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CHANNEL_TOPIC: ${{ vars.CHANNEL_TOPIC }}
           VIDEO_LANGUAGE: ${{ vars.VIDEO_LANGUAGE }}
           VIDEO_DURATION: ${{ vars.VIDEO_DURATION }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-          TTS_VOICE: en-US-GuyNeural
-          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
-          AZURE_SPEECH_REGION: ${{ vars.AZURE_SPEECH_REGION }}
+          KOKORO_VOICE: am_michael
+          KOKORO_MODEL_PATH: models/kokoro-v1.0.onnx
+          KOKORO_VOICES_PATH: models/voices-v1.0.bin
         run: python main.py
+
       - name: Upload review package
         uses: actions/upload-artifact@v4
         with:
