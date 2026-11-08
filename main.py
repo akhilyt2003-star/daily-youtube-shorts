@@ -1,4 +1,4 @@
-import os, json, subprocess, re, math, random, asyncio, time
+import os, json, subprocess, re, math, random, time
 from pathlib import Path
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -8,6 +8,8 @@ OUT.mkdir(exist_ok=True)
 W, H = 720, 1280
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 VOICE = os.getenv("TTS_VOICE", "en-US-GuyNeural")
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "")
 
 def run(cmd):
     subprocess.run(cmd, check=True)
@@ -255,19 +257,40 @@ def main():
     audio_files=[OUT/f"voice_{i:02d}.wav" for i in range(len(narrations))]
     mp3_files=[OUT/f"voice_{i:02d}.mp3" for i in range(len(narrations))]
 
-    async def synthesize_all(rate_percent):
-        import edge_tts
+    def synthesize_all(rate_percent):
+        from xml.sax.saxutils import escape
+        if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
+            raise RuntimeError(
+                "Azure Speech credentials are missing. Add AZURE_SPEECH_KEY as a GitHub Actions secret "
+                "and AZURE_SPEECH_REGION as a repository variable."
+            )
+        endpoint = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+        headers = {
+            "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+            "User-Agent": "daily-youtube-shorts-generator",
+        }
         for text, mp3, wav in zip(narrations, mp3_files, audio_files):
+            ssml = (
+                "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+                "xml:lang='en-US'>"
+                f"<voice name='{VOICE}'><prosody rate='{rate_percent:+d}%'>{escape(text)}</prosody></voice>"
+                "</speak>"
+            )
             last_error = None
             for attempt in range(3):
                 try:
-                    communicate = edge_tts.Communicate(
-                        text=text, voice=VOICE, rate=f"{rate_percent:+d}%",
-                        volume="+0%", pitch="+0Hz"
+                    response = requests.post(
+                        endpoint, headers=headers, data=ssml.encode("utf-8"), timeout=60
                     )
-                    await communicate.save(str(mp3))
-                    if not mp3.exists() or mp3.stat().st_size < 1000:
-                        raise RuntimeError("Neural TTS returned an empty or unusually small MP3")
+                    if response.status_code != 200:
+                        raise RuntimeError(
+                            f"Azure Speech returned HTTP {response.status_code}: {response.text[:500]}"
+                        )
+                    if len(response.content) < 1000:
+                        raise RuntimeError("Azure Speech returned an empty or unusually small audio response")
+                    mp3.write_bytes(response.content)
                     subprocess.run([
                         "ffmpeg", "-y", "-i", str(mp3), "-ar", "48000",
                         "-ac", "1", "-c:a", "pcm_s16le", str(wav)
@@ -277,14 +300,14 @@ def main():
                 except Exception as exc:
                     last_error = exc
                     if attempt < 2:
-                        await asyncio.sleep(2 ** attempt)
+                        time.sleep((attempt + 1) * 5)
             if last_error is not None:
                 raise RuntimeError(
-                    f"Neural TTS failed for scene audio {mp3.name} after 3 attempts: {last_error}"
+                    f"Azure neural TTS failed for scene audio {mp3.name} after 3 attempts: {last_error}"
                 ) from last_error
 
     def render_voice(rate_percent):
-        asyncio.run(synthesize_all(rate_percent))
+        synthesize_all(rate_percent)
         rendered_durations=[]
         for wav in audio_files:
             dur=float(subprocess.check_output(
@@ -294,7 +317,7 @@ def main():
             rendered_durations.append(dur)
         return rendered_durations, sum(rendered_durations)
 
-    # Use a neural US male voice and only modest rate adjustments to preserve
+    # Use Azure Neural US male voice and modest rate adjustments to preserve
     # natural delivery while keeping the requested 35-45 second output.
     active_rate=0
     durations,total=render_voice(active_rate)
@@ -312,7 +335,7 @@ def main():
             f"Neural narration duration is {total:.1f}s, outside the 35-45s target, "
             f"after modest rate adjustment ({active_rate:+d}%). Shorten or expand the generated script and rerun."
         )
-    print(f"Neural narration duration: {total:.1f}s; voice: {VOICE}; rate: {active_rate:+d}%")
+    print(f"Azure Neural narration duration: {total:.1f}s; voice: {VOICE}; rate: {active_rate:+d}%")
     # Render animated scene frames: the guide gestures/bobs, science highlights pulse,
     # particles drift, and each scene receives a gentle camera move during encoding.
     video_parts=[]
