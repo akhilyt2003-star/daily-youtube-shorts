@@ -33,7 +33,7 @@ jobs:
           VIDEO_DURATION: ${{ vars.VIDEO_DURATION }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           ESPEAK_VOICE: en-us
-          ESPEAK_RATE: "142"
+          ESPEAK_RATE: "125"
         run: python main.py
       - name: Upload review package
         uses: actions/upload-artifact@v4
