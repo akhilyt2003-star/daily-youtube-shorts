@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 OUT = Path("output")
 OUT.mkdir(exist_ok=True)
 W, H = 720, 1280
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 def call_gemini():
     key = os.environ["GEMINI_API_KEY"]
